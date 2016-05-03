@@ -10,6 +10,7 @@
 #define LOOP_PERIOD       0.02
 #define LOOP_RATE         1.0/LOOP_PERIOD
 #define LOOP_PERIOD_MS    LOOP_PERIOD*1000.0
+#define EXPOSURE_TIME_US  6000
 
 // pinout definitions
 #define ESC_PIN       10
@@ -21,8 +22,8 @@
 #define ULTRASONIC_3  A2
 #define ULTRASONIC_4  A3
 #define CAMERA_AOUT   A4
-#define CAMERA_SI     4
-#define CAMERA_CLK    9
+#define CAMERA_SI     9
+#define CAMERA_CLK    4
 #define LED           13
 
 // actuator clamping limits
@@ -94,17 +95,13 @@ void loop() {
   loop_start_time = millis();
   
   // take in and process Serial commands ('L', 'M', 'R')
-  if (Serial.available() > 0) {
-    int byte_read = Serial.read();
-    if (byte_read == 76) lane_ref = 0;
-    if (byte_read == 77) lane_ref = 1;
-    if (byte_read == 82) lane_ref = 2;
-    Serial.print("Lane change to: ");
-    Serial.println(lane_ref);
-  }
+
 
   // read camera
-
+  clear_camera();
+  delayMicroseconds(EXPOSURE_TIME_US);
+  read_camera();
+  Serial.println(find_max(camera_data));
 
   // process camera
 
@@ -123,9 +120,25 @@ void loop() {
 
   // wait for long enough to fulfill loop period
   Serial.println(millis()-loop_start_time);
-  delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
+//  delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
   
 }
+
+/* Author: Cheng Hao Yuan
+ * reads lane change command from serial, if available.
+ */
+void read_lane_change_serial() {
+  if (Serial.available() > 0) {
+    int byte_read = Serial.read();
+    if (byte_read == 76) lane_ref = 0;
+    if (byte_read == 77) lane_ref = 1;
+    if (byte_read == 82) lane_ref = 2;
+    Serial.print("Lane change to: ");
+    Serial.println(lane_ref);
+  }
+  return;
+}
+
 
 /* Author: Cheng Hao Yuan
  * float pwm is between 0.0 and 1.0, where 0.0 is coasting, and 1.0 is full throttle forward.
@@ -195,24 +208,54 @@ void set_servo(int servo_angle) {
 }
 
 
-/* Author:
- * initializes camera.
+/* Author: Cheng Hao Yuan
+ * dumps old pixel values on the camera.
  */
-void initialize_camera() {
-  // FIXME
-  
+void clear_camera() {
+  digitalWrite(CAMERA_SI, HIGH);
+  digitalWrite(CAMERA_CLK, HIGH);
+  digitalWrite(CAMERA_SI, LOW);
+  digitalWrite(CAMERA_CLK, LOW);
+  for(int i = 0; i < 128; i++){
+    digitalWrite(CAMERA_CLK, HIGH);
+    digitalWrite(CAMERA_CLK, LOW);
+  }
   return;
 }
 
 
-/* Author:
+/* Author: Cheng Hao Yuan
  * read camera into the passed-in array.
  * returns nothing.
  */
-void read_camera(int *data) {
-  // FIXME
-  
+void read_camera() {
+  digitalWrite(CAMERA_SI, HIGH);
+  digitalWrite(CAMERA_CLK, HIGH);
+  digitalWrite(CAMERA_SI, LOW);
+  digitalWrite(CAMERA_CLK, LOW);
+  for(int i = 0; i < 128; i++) {
+    camera_data[i] = analogRead(CAMERA_AOUT);
+    digitalWrite(CAMERA_CLK, HIGH);
+    digitalWrite(CAMERA_CLK, LOW);
+  }
   return;
+}
+
+
+
+/* Author: Cheng Hao Yuan
+ * returns the index of the max entry in an 128-element array.
+ */
+int find_max(int *arr) {
+  int temp_max = 0;
+  int temp_indmax = 0;
+  for (int i=0; i<128; i++) {
+    if (arr[i]>temp_max) {
+      temp_max = arr[i];
+      temp_indmax = i;
+    }
+  }
+  return temp_indmax;
 }
 
 
