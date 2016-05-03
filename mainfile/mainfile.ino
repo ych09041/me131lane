@@ -7,10 +7,22 @@
 #include <Servo.h>
 
 // loop period in s and ms, and rate in Hz
-#define LOOP_PERIOD       0.02
+#define LOOP_PERIOD       0.05
 #define LOOP_RATE         1.0/LOOP_PERIOD
 #define LOOP_PERIOD_MS    LOOP_PERIOD*1000.0
-#define EXPOSURE_TIME_US  6000
+
+// camera constants
+#define EXPOSURE_TIME_US  8000
+#define PEAK_CUTOFF       0.3
+#define MAX_WIDTH_LIMIT   40
+#define MIN_WIDTH_LIMIT   2
+#define FOV_CENTER        63
+
+// controller gains
+#define STEERING_KP     1
+#define STEERING_KD     0
+#define VELOCITY_KP     0.1
+#define VELOCITY_KI     0
 
 // pinout definitions
 #define ESC_PIN       10
@@ -37,6 +49,8 @@
 Servo ESC, SERVO;
 volatile int encoder_count;
 int camera_data[128];
+float normalized_data[128];
+int cutoff_data[128];
 int lane_centers[3];
 float ultrasonic_dist[4];
 float velocity_ref;
@@ -64,9 +78,6 @@ void setup() {
   SERVO.attach(SERVO_PIN);
   attachInterrupt(0, encoderISR, CHANGE); // D2, FL
   attachInterrupt(1, encoderISR, CHANGE); // D3, FR
-  
-
-  // initialize camera
 
 
   // initialize velocity control variables
@@ -95,16 +106,22 @@ void loop() {
   loop_start_time = millis();
   
   // take in and process Serial commands ('L', 'M', 'R')
-
+  read_lane_change_serial();
 
   // read camera
   clear_camera();
   delayMicroseconds(EXPOSURE_TIME_US);
   read_camera();
-  Serial.println(find_max(camera_data));
-
+  
   // process camera
-
+  process_camera();
+  Serial.print(lane_centers[0]);
+  Serial.print('\t');
+  Serial.print(lane_centers[1]);
+  Serial.print('\t');
+  Serial.print(lane_centers[2]);
+  Serial.println();
+  
 
   // read ultrasonics
 
@@ -113,6 +130,8 @@ void loop() {
 
 
   // low level lane keeping PID
+  float steering_percent = steering_PID();
+  SERVO.write(steering_to_servo(steering_percent));
 
 
   // compute and set throttle
@@ -120,9 +139,14 @@ void loop() {
 
   // wait for long enough to fulfill loop period
   Serial.println(millis()-loop_start_time);
-//  delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
+  delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
   
 }
+
+
+
+
+
 
 /* Author: Cheng Hao Yuan
  * reads lane change command from serial, if available.
@@ -136,7 +160,6 @@ void read_lane_change_serial() {
     Serial.print("Lane change to: ");
     Serial.println(lane_ref);
   }
-  return;
 }
 
 
@@ -148,8 +171,7 @@ void read_lane_change_serial() {
 void motor_forward(float pwm) {
   if (pwm < MIN_THROTTLE) pwm = MIN_THROTTLE;
   if (pwm > MAX_THROTTLE) pwm = MAX_THROTTLE;
-  ESC.write(pwm);  
-  return;
+  ESC.write(pwm);
 }
 
 /* Author: Cheng Hao Yuan
@@ -158,8 +180,7 @@ void motor_forward(float pwm) {
 void motor_brake() {
   ESC.write(80);
   digitalWrite(LED, LOW);
-  while(1); 
-  return;
+  while(1);
 }
 
 
@@ -168,8 +189,7 @@ void motor_brake() {
  * returns nothing.
  */
 void encoderISR() {
-  encoder_count++; 
-  return;
+  encoder_count++;
 }
 
 
@@ -190,9 +210,7 @@ float motor_PID(float velocity_setpoint) {
  * this is the servo mapping.
  */
 int steering_to_servo(float steering) {
-  // FIXME
-  
-  return 90;
+  return (int)(steering * 180.0);
 }
 
 
@@ -203,8 +221,7 @@ int steering_to_servo(float steering) {
 void set_servo(int servo_angle) {
   if (servo_angle < MIN_STEERING) servo_angle = MIN_STEERING;
   if (servo_angle > MAX_STEERING) servo_angle = MAX_STEERING;
-  SERVO.write(servo_angle);  
-  return;
+  SERVO.write(servo_angle);
 }
 
 
@@ -220,7 +237,6 @@ void clear_camera() {
     digitalWrite(CAMERA_CLK, HIGH);
     digitalWrite(CAMERA_CLK, LOW);
   }
-  return;
 }
 
 
@@ -238,7 +254,6 @@ void read_camera() {
     digitalWrite(CAMERA_CLK, HIGH);
     digitalWrite(CAMERA_CLK, LOW);
   }
-  return;
 }
 
 
@@ -258,49 +273,129 @@ int find_max(int *arr) {
   return temp_indmax;
 }
 
-
-/* Author:
- * process camera data and produce three lane centers (L,M,R).
- * writes in passed-in arrays, returns nothing.
+/* Author: Cheng Hao Yuan
+ * returns the index of the min entry in an 128-element array.
  */
-void process_camera(int *camera, int *lanes) {
-  // FIXME
-  
-  return;
+int find_min(int *arr) {
+  int temp_min = 10000;
+  int temp_indmin = 0;
+  for (int i=0; i<128; i++) {
+    if (arr[i]<temp_min) {
+      temp_min = arr[i];
+      temp_indmin = i;
+    }
+  }
+  return temp_indmin;
+}
+
+/* Author: Cheng Hao Yuan
+ * process camera data and produce three lane centers (L,M,R).
+ * writes in global arrays, returns nothing.
+ */
+void process_camera() {
+  // normalize data to 0.0-1.0
+  int max_reading = camera_data[find_max(camera_data)];
+  int min_reading = camera_data[find_min(camera_data)];
+  float height_diff = (float)max_reading - (float)min_reading;
+  for (int i=0; i<128; i++) {
+    normalized_data[i] = (float)(camera_data[i] - min_reading) / height_diff;
+  }
+
+  // cutoff data at threshold
+  for (int i=0; i<128; i++) {
+    if (normalized_data[i] > PEAK_CUTOFF) {
+      cutoff_data[i] = 1;
+    } else {
+      cutoff_data[i] = 0;
+    }
+  }
+
+  // find three line centers
+  bool started1 = false;
+  bool ended1 = false;
+  int start1 = 0;
+  int end1 = 0;
+  bool started2 = false;
+  bool ended2 = false;
+  int start2 = 0;
+  int end2 = 0;
+  bool started3 = false;
+  bool ended3 = false;
+  int start3 = 0;
+  int end3 = 0;
+  for (int i=0; i<128; i++) {
+    // first peak
+    if (cutoff_data[i] == 1 && !started1) {
+      started1 = true;
+      start1 = i;
+    }
+    if (cutoff_data[i] == 0 && started1) {
+      end1 = i;
+      if (end1 - start1 <= MAX_WIDTH_LIMIT && end1 - start1 >= MIN_WIDTH_LIMIT) {
+        lane_centers[0] = (start1+end1)/2;
+        ended1 = true;
+      }
+    }
+
+    // second peak
+    if (cutoff_data[i] == 1 && !started2 && ended1) {
+      started2 = true;
+      start2 = i;
+    }
+    if (cutoff_data[i] == 0 && started2) {
+      end2 = i;
+      if (end2 - start2 <= MAX_WIDTH_LIMIT && end2 - start2 >= MIN_WIDTH_LIMIT) {
+        lane_centers[1] = (start2+end2)/2;
+        ended2 = true;
+      }
+    }
+
+    // third peak
+    if (cutoff_data[i] == 1 && !started3 && ended2) {
+      started3 = true;
+      start3 = i;
+    }
+    if (cutoff_data[i] == 0 && started3) {
+      end3 = i;
+      if (end3 - start3 <= MAX_WIDTH_LIMIT && end3 - start3 >= MIN_WIDTH_LIMIT) {
+        lane_centers[2] = (start3+end3)/2;
+        ended3 = true;
+      }
+    }
+  }
 }
 
 
 /* Author:
- * reads all ultrasonic sensors, converts to meters, and store in passed-in array.
+ * reads all ultrasonic sensors, converts to meters, and store in global array ultrasonic_dist.
  * returns nothing.
  */
-void read_ultrasonic(float *dist) {
+void read_ultrasonic() {
   // FIXME
   
-  return;
 }
 
 
 /* Author:
  * takes lane positions and ultrasonic clearance distances and logically decide which lane position to use.
- * sets the velocity reference and lane reference (globals).
+ * sets the velocity_ref and lane_ref (globals).
  * this is the logic for obstacle avoidance and lane selection (and stopping if can't merge).
  * returns nothing.
  */
-void path_control(int *lanes, float *distances) {
+void path_control() {
   // FIXME
   
-  return;
+
 }
 
-/* Author:
- * uses lane reference and lane positions to determine lateral error.
+/* Author: Cheng Hao Yuan
+ * uses lane_ref and lane_centers to determine lateral error.
  * produce steering angle (0.0-1.0) to reduce lateral error.
  */
-float steering_PID(int *lanes, int lane_num) {
-  // FIXME
-  
-  return 0.5;
+float steering_PID() {
+  float e_lat = (lane_centers[lane_ref] - FOV_CENTER)/128.0;
+  float steering_signal = STEERING_KP * e_lat;
+  return steering_signal;
 }
 
 
