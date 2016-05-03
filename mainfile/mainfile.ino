@@ -1,25 +1,39 @@
+/* ME 131 Spring 2016 Term Project
+ * Autonomous Lane-Keeping and Obstacle Avoidance
+ * Cheng Hao Yuan, Hohyun Song, Tony Abdo
+ * 05/09/2016
+ */
+
 #include <Servo.h>
 
 // loop period in s and ms, and rate in Hz
-#define LOOP_PERIOD 0.02
-#define LOOP_RATE 1.0/LOOP_PERIOD
-#define LOOP_PERIOD_MS LOOP_PERIOD*1000.0
+#define LOOP_PERIOD       0.02
+#define LOOP_RATE         1.0/LOOP_PERIOD
+#define LOOP_PERIOD_MS    LOOP_PERIOD*1000.0
 
 // pinout definitions
 #define ESC_PIN       10
 #define SERVO_PIN     11
 #define ENCODER_FL    2
 #define ENCODER_FR    3
-#define ULTRASONIC_1  5
-#define ULTRASONIC_2  6
-#define ULTRASONIC_3  7
-#define ULTRASONIC_4  8
-#define CAMERA_AOUT   A0
-#define CAMERA_SI     A1
-#define CAMERA_CLK    A2
+#define ULTRASONIC_1  A0
+#define ULTRASONIC_2  A1
+#define ULTRASONIC_3  A2
+#define ULTRASONIC_4  A3
+#define CAMERA_AOUT   A4
+#define CAMERA_SI     4
+#define CAMERA_CLK    9
 #define LED           13
 
+// actuator clamping limits
+#define MAX_STEERING  150
+#define MIN_STEERING  30
+#define MAX_THROTTLE  130
+#define MIN_THROTTLE  90
+
+
 // global storage
+Servo ESC, SERVO;
 volatile int encoder_count;
 int camera_data[128];
 int lane_centers[3];
@@ -34,24 +48,44 @@ void setup() {
   // begin serial
   Serial.begin(115200);
 
-
   // set pinmodes
+  pinMode(ENCODER_FL, INPUT_PULLUP);
+  pinMode(ENCODER_FR, INPUT_PULLUP);
+  pinMode(ESC_PIN, OUTPUT);
+  pinMode(SERVO_PIN, OUTPUT);
+  pinMode(LED, OUTPUT);
+  pinMode(CAMERA_SI, OUTPUT);
+  pinMode(CAMERA_CLK, OUTPUT);  
+  
 
-
-  // attach interrupts
-
+  // attach interrupts and servos
+  ESC.attach(ESC_PIN);
+  SERVO.attach(SERVO_PIN);
+  attachInterrupt(0, encoderISR, CHANGE); // D2, FL
+  attachInterrupt(1, encoderISR, CHANGE); // D3, FR
+  
 
   // initialize camera
 
 
   // initialize velocity control variables
-
+  encoder_count = 0;
+  velocity_ref = 0;
+  lane_ref = 1; // middle lane by default
+  
 
   // arming ESC and set initial posture
-
+  SERVO.write(90);
+  ESC.write(90);
+  delay(1000);
+  
 
   // blink LED for indication
-  
+  digitalWrite(LED, HIGH);
+  delay(500);
+  digitalWrite(LED, LOW);
+  delay(500);
+  digitalWrite(LED, HIGH);  
 
 }
 
@@ -60,7 +94,14 @@ void loop() {
   loop_start_time = millis();
   
   // take in and process Serial commands ('L', 'M', 'R')
-
+  if (Serial.available() > 0) {
+    int byte_read = Serial.read();
+    if (byte_read == 76) lane_ref = 0;
+    if (byte_read == 77) lane_ref = 1;
+    if (byte_read == 82) lane_ref = 2;
+    Serial.print("Lane change to: ");
+    Serial.println(lane_ref);
+  }
 
   // read camera
 
@@ -83,39 +124,38 @@ void loop() {
   // wait for long enough to fulfill loop period
   Serial.println(millis()-loop_start_time);
   delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
+  
 }
 
-/* Author:
+/* Author: Cheng Hao Yuan
  * float pwm is between 0.0 and 1.0, where 0.0 is coasting, and 1.0 is full throttle forward.
  * converts float pwm to analogWrite(0-255).
  * returns nothing.
  */
 void motor_forward(float pwm) {
-  // FIXME
-  
+  if (pwm < MIN_THROTTLE) pwm = MIN_THROTTLE;
+  if (pwm > MAX_THROTTLE) pwm = MAX_THROTTLE;
+  ESC.write(pwm);  
   return;
 }
 
-/* Author:
- * float pwm is between 0.0 and 1.0, where 0.0 is coasting, and 1.0 is full brake.
- * should have protection against reverse throttle upon second brake.
- * converts float pwm to analogWrite(0-255).
- * returns nothing.
+/* Author: Cheng Hao Yuan
+ * brake to stop, halts the program until reset is pressed. turns off LED13 for indication.
  */
-void motor_brake(float pwm) {
-  // FIXME
-  
+void motor_brake() {
+  ESC.write(80);
+  digitalWrite(LED, LOW);
+  while(1); 
   return;
 }
 
 
-/* Author:
+/* Author: Cheng Hao Yuan
  * ISR for both wheel encoders. Increments encoder_count by 1 when called.
  * returns nothing.
  */
 void encoderISR() {
-  // FIXME
-  
+  encoder_count++; 
   return;
 }
 
@@ -143,13 +183,14 @@ int steering_to_servo(float steering) {
 }
 
 
-/* Author:
+/* Author: Cheng Hao Yuan
  * writes the servo angle to the servo
  * returns nothing.
  */
 void set_servo(int servo_angle) {
-  // FIXME
-  
+  if (servo_angle < MIN_STEERING) servo_angle = MIN_STEERING;
+  if (servo_angle > MAX_STEERING) servo_angle = MAX_STEERING;
+  SERVO.write(servo_angle);  
   return;
 }
 
@@ -187,10 +228,10 @@ void process_camera(int *camera, int *lanes) {
 
 
 /* Author:
- * reads all ultrasonic sensors and store in passed-in array.
+ * reads all ultrasonic sensors, converts to meters, and store in passed-in array.
  * returns nothing.
  */
-void read_ultrasonic(int *dist) {
+void read_ultrasonic(float *dist) {
   // FIXME
   
   return;
