@@ -12,7 +12,7 @@
 #define LOOP_PERIOD_MS    LOOP_PERIOD*1000.0
 
 // camera constants
-#define EXPOSURE_TIME_US  8000
+#define EXPOSURE_TIME_US  9000
 #define PEAK_CUTOFF       0.3
 #define MAX_WIDTH_LIMIT   40
 #define MIN_WIDTH_LIMIT   2
@@ -39,8 +39,8 @@
 #define LED           13
 
 // actuator clamping limits
-#define MAX_STEERING  150
-#define MIN_STEERING  30
+#define MAX_STEERING  140
+#define MIN_STEERING  40
 #define MAX_THROTTLE  130
 #define MIN_THROTTLE  90
 
@@ -83,7 +83,7 @@ void setup() {
   // initialize velocity control variables
   encoder_count = 0;
   velocity_ref = 0;
-  lane_ref = 1; // middle lane by default
+  lane_ref = 0; // middle lane by default
   
 
   // arming ESC and set initial posture
@@ -131,14 +131,16 @@ void loop() {
 
   // low level lane keeping PID
   float steering_percent = steering_PID();
-  SERVO.write(steering_to_servo(steering_percent));
+  int servo_write = steering_to_servo(steering_percent);
+  Serial.println(servo_write);
+  set_servo(servo_write);
 
 
   // compute and set throttle
 
 
   // wait for long enough to fulfill loop period
-  Serial.println(millis()-loop_start_time);
+//  Serial.println(millis()-loop_start_time);
   delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
   
 }
@@ -205,12 +207,12 @@ float motor_PID(float velocity_setpoint) {
 }
 
 
-/* Author:
+/* Author: Cheng Hao Yuan
  * converts steering angle percent (0.0-1.0) to servo angle (0-180).
  * this is the servo mapping.
  */
 int steering_to_servo(float steering) {
-  return (int)(steering * 180.0);
+  return (int)((steering + 0.5) * 180.0);
 }
 
 
@@ -336,7 +338,7 @@ void process_camera() {
         ended1 = true;
       }
     }
-
+/*
     // second peak
     if (cutoff_data[i] == 1 && !started2 && ended1) {
       started2 = true;
@@ -362,6 +364,8 @@ void process_camera() {
         ended3 = true;
       }
     }
+
+    */
   }
 }
 
@@ -393,7 +397,7 @@ void path_control() {
  * produce steering angle (0.0-1.0) to reduce lateral error.
  */
 float steering_PID() {
-  float e_lat = (lane_centers[lane_ref] - FOV_CENTER)/128.0;
+  float e_lat = (FOV_CENTER - lane_centers[lane_ref])/128.0;
   float steering_signal = STEERING_KP * e_lat;
   return steering_signal;
 }
