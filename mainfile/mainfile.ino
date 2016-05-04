@@ -29,11 +29,11 @@
 #define SERVO_PIN     11
 #define ENCODER_FL    2
 #define ENCODER_FR    3
-#define ULTRASONIC_1  A0
-#define ULTRASONIC_2  A1
-#define ULTRASONIC_3  A2
-#define ULTRASONIC_4  A3
-#define CAMERA_AOUT   A4
+#define ULTRASONIC_1  0  // A0
+#define ULTRASONIC_2  1  // A1
+#define ULTRASONIC_3  2  // A2
+#define ULTRASONIC_4  3  // A3
+#define CAMERA_AOUT   4  // A4
 #define CAMERA_SI     9
 #define CAMERA_CLK    4
 #define LED           13
@@ -43,6 +43,12 @@
 #define MIN_STEERING  40
 #define MAX_THROTTLE  130
 #define MIN_THROTTLE  90
+
+// Define ADC prescaler
+const unsigned char PS_16 = (1 << ADPS2);
+const unsigned char PS_32 = (1 << ADPS2) | (1 << ADPS0);
+const unsigned char PS_64 = (1 << ADPS2) | (1 << ADPS1);
+const unsigned char PS_128 = (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
 
 
 // global storage
@@ -71,7 +77,10 @@ void setup() {
   pinMode(LED, OUTPUT);
   pinMode(CAMERA_SI, OUTPUT);
   pinMode(CAMERA_CLK, OUTPUT);  
-  
+
+  // setup fast analog read
+  ADCSRA &= ~PS_128;
+  ADCSRA |= PS_16; 
 
   // attach interrupts and servos
   ESC.attach(ESC_PIN);
@@ -132,7 +141,7 @@ void loop() {
   // low level lane keeping PID
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
-  Serial.println(servo_write);
+//  Serial.println(servo_write);
   set_servo(servo_write);
 
 
@@ -140,7 +149,7 @@ void loop() {
 
 
   // wait for long enough to fulfill loop period
-//  Serial.println(millis()-loop_start_time);
+  Serial.println(millis()-loop_start_time);
   delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
   
 }
@@ -231,13 +240,13 @@ void set_servo(int servo_angle) {
  * dumps old pixel values on the camera.
  */
 void clear_camera() {
-  digitalWrite(CAMERA_SI, HIGH);
-  digitalWrite(CAMERA_CLK, HIGH);
-  digitalWrite(CAMERA_SI, LOW);
-  digitalWrite(CAMERA_CLK, LOW);
+  PORTB |= B00010000; // SI high
+  PORTD |= B00010000; // CLK high
+  PORTB ^= B00010000; // SI low
+  PORTD ^= B00010000; // CLK low
   for(int i = 0; i < 128; i++){
-    digitalWrite(CAMERA_CLK, HIGH);
-    digitalWrite(CAMERA_CLK, LOW);
+    PORTD |= B00010000; // CLK high
+    PORTD ^= B00010000; // CLK low
   }
 }
 
@@ -247,14 +256,14 @@ void clear_camera() {
  * returns nothing.
  */
 void read_camera() {
-  digitalWrite(CAMERA_SI, HIGH);
-  digitalWrite(CAMERA_CLK, HIGH);
-  digitalWrite(CAMERA_SI, LOW);
-  digitalWrite(CAMERA_CLK, LOW);
-  for(int i = 0; i < 128; i++) {
+  PORTB |= B00010000; // SI high
+  PORTD |= B00010000; // CLK high
+  PORTB ^= B00010000; // SI low
+  PORTD ^= B00010000; // CLK low
+  for(int i = 0; i < 128; i++){
     camera_data[i] = analogRead(CAMERA_AOUT);
-    digitalWrite(CAMERA_CLK, HIGH);
-    digitalWrite(CAMERA_CLK, LOW);
+    PORTD |= B00010000; // CLK high
+    PORTD ^= B00010000; // CLK low
   }
 }
 
