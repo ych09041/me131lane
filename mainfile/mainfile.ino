@@ -7,16 +7,18 @@
 #include <Servo.h>
 
 // loop period in s and ms, and rate in Hz
-#define LOOP_PERIOD       0.05
+#define LOOP_PERIOD       0.025
 #define LOOP_RATE         1.0/LOOP_PERIOD
 #define LOOP_PERIOD_MS    LOOP_PERIOD*1000.0
 
 // camera constants
-#define EXPOSURE_TIME_US  9000
-#define PEAK_CUTOFF       0.3
+#define EXPOSURE_TIME_US  10000
+#define PEAK_CUTOFF       0.8
 #define MAX_WIDTH_LIMIT   40
-#define MIN_WIDTH_LIMIT   2
-#define FOV_CENTER        63
+#define MIN_WIDTH_LIMIT   1
+#define CENTER_LANE       73
+#define LEFT_LANE         120
+#define RIGHT_LANE        23
 
 // controller gains
 #define STEERING_KP     1
@@ -58,6 +60,7 @@ int camera_data[128];
 float normalized_data[128];
 int cutoff_data[128];
 int lane_centers[3];
+int lane_center;
 float ultrasonic_dist[4];
 float velocity_ref;
 int lane_ref;
@@ -92,7 +95,7 @@ void setup() {
   // initialize velocity control variables
   encoder_count = 0;
   velocity_ref = 0;
-  lane_ref = 0; // middle lane by default
+  lane_ref = CENTER_LANE; // middle lane by default
   
 
   // arming ESC and set initial posture
@@ -123,13 +126,9 @@ void loop() {
   read_camera();
   
   // process camera
-  process_camera();
-  Serial.print(lane_centers[0]);
-  Serial.print('\t');
-  Serial.print(lane_centers[1]);
-  Serial.print('\t');
-  Serial.print(lane_centers[2]);
-  Serial.println();
+  process_camera_one_peak();
+  Serial.print("lane center: ");
+  Serial.println(lane_center);
   
 
   // read ultrasonics
@@ -141,7 +140,7 @@ void loop() {
   // low level lane keeping PID
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
-//  Serial.println(servo_write);
+  Serial.println(servo_write);
   set_servo(servo_write);
 
 
@@ -149,6 +148,7 @@ void loop() {
 
 
   // wait for long enough to fulfill loop period
+  Serial.print("Loop usage us: ");
   Serial.println(millis()-loop_start_time);
   delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
   
@@ -165,9 +165,9 @@ void loop() {
 void read_lane_change_serial() {
   if (Serial.available() > 0) {
     int byte_read = Serial.read();
-    if (byte_read == 76) lane_ref = 0;
-    if (byte_read == 77) lane_ref = 1;
-    if (byte_read == 82) lane_ref = 2;
+    if (byte_read == 76) lane_ref = LEFT_LANE;
+    if (byte_read == 77) lane_ref = CENTER_LANE;
+    if (byte_read == 82) lane_ref = RIGHT_LANE;
     Serial.print("Lane change to: ");
     Serial.println(lane_ref);
   }
@@ -240,9 +240,9 @@ void set_servo(int servo_angle) {
  * dumps old pixel values on the camera.
  */
 void clear_camera() {
-  PORTB |= B00010000; // SI high
+  PORTB |= B00000010; // SI high
   PORTD |= B00010000; // CLK high
-  PORTB ^= B00010000; // SI low
+  PORTB ^= B00000010; // SI low
   PORTD ^= B00010000; // CLK low
   for(int i = 0; i < 128; i++){
     PORTD |= B00010000; // CLK high
@@ -256,9 +256,9 @@ void clear_camera() {
  * returns nothing.
  */
 void read_camera() {
-  PORTB |= B00010000; // SI high
+  PORTB |= B00000010; // SI high
   PORTD |= B00010000; // CLK high
-  PORTB ^= B00010000; // SI low
+  PORTB ^= B00000010; // SI low
   PORTD ^= B00010000; // CLK low
   for(int i = 0; i < 128; i++){
     camera_data[i] = analogRead(CAMERA_AOUT);
@@ -303,7 +303,7 @@ int find_min(int *arr) {
  * process camera data and produce three lane centers (L,M,R).
  * writes in global arrays, returns nothing.
  */
-void process_camera() {
+void process_camera_three_peaks() {
   // normalize data to 0.0-1.0
   int max_reading = camera_data[find_max(camera_data)];
   int min_reading = camera_data[find_min(camera_data)];
@@ -347,7 +347,7 @@ void process_camera() {
         ended1 = true;
       }
     }
-/*
+
     // second peak
     if (cutoff_data[i] == 1 && !started2 && ended1) {
       started2 = true;
@@ -373,8 +373,51 @@ void process_camera() {
         ended3 = true;
       }
     }
+  }
+}
 
-    */
+
+
+/* Author: Cheng Hao Yuan
+ * process camera data and produce one line center.
+ * writes in global var, returns nothing.
+ */
+void process_camera_one_peak() {
+  // normalize data to 0.0-1.0
+  int max_reading = camera_data[find_max(camera_data)];
+  int min_reading = camera_data[find_min(camera_data)];
+  float height_diff = (float)max_reading - (float)min_reading;
+  for (int i=0; i<128; i++) {
+    normalized_data[i] = (float)(camera_data[i] - min_reading) / height_diff;
+  }
+
+  // cutoff data at threshold
+  for (int i=0; i<128; i++) {
+    if (normalized_data[i] > PEAK_CUTOFF) {
+      cutoff_data[i] = 1;
+    } else {
+      cutoff_data[i] = 0;
+    }
+  }
+
+  // find one line center
+  bool started1 = false;
+  bool ended1 = false;
+  int start1 = 0;
+  int end1 = 0;
+  for (int i=0; i<128; i++) {
+    // first peak
+    if (cutoff_data[i] == 1 && !started1) {
+      started1 = true;
+      start1 = i;
+    }
+    if (cutoff_data[i] == 0 && started1) {
+      end1 = i;
+      if (end1 - start1 <= MAX_WIDTH_LIMIT && end1 - start1 >= MIN_WIDTH_LIMIT) {
+        lane_center = (start1+end1)/2;
+        ended1 = true;
+      }
+    }    
   }
 }
 
@@ -406,7 +449,7 @@ void path_control() {
  * produce steering angle (0.0-1.0) to reduce lateral error.
  */
 float steering_PID() {
-  float e_lat = (FOV_CENTER - lane_centers[lane_ref])/128.0;
+  float e_lat = (lane_ref - lane_center)/128.0;
   float steering_signal = STEERING_KP * e_lat;
   return steering_signal;
 }
