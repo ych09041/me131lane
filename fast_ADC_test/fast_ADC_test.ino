@@ -24,25 +24,25 @@ void setup() {
 
 
 void loop() {
-    PORTB |= B00000010; // SI high
-    PORTD |= B00010000; // CLK high
-    PORTB ^= B00000010; // SI low
-    PORTD ^= B00010000; // CLK low
-    
-//  unsigned long start_time_us = micros();
-//  for (unsigned int i=0; i<128; i++) {
-//    PORTB |= B00010000; // SI high
+//    PORTB |= B00000010; // SI high
 //    PORTD |= B00010000; // CLK high
-//    PORTB ^= B00010000; // SI low
+//    PORTB ^= B00000010; // SI low
 //    PORTD ^= B00010000; // CLK low
-////    digitalWrite(4, HIGH);  CLK is 4
-////    digitalWrite(9, HIGH);  SI is 9
-////    digitalWrite(4, LOW);
-////    digitalWrite(9, LOW);
-//    camera_data[i] = analogRead(4);
-//  }
-//  Serial.println(micros()-start_time_us);
+    
+  unsigned long start_time_us = micros();
+  for (unsigned int i=0; i<128; i++) {
+    PORTB |= B00010000; // SI high
+    PORTD |= B00010000; // CLK high
+    PORTB ^= B00010000; // SI low
+    PORTD ^= B00010000; // CLK low
+//    digitalWrite(4, HIGH);  CLK is 4
+//    digitalWrite(9, HIGH);  SI is 9
+//    digitalWrite(4, LOW);
+//    digitalWrite(9, LOW);
+    camera_data[i] = analogRead(4);
+  }
+  Serial.println(micros()-start_time_us);
 //  
 //
-//  delay(1000);
+  delay(1000);
 }
