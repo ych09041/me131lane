@@ -188,34 +188,31 @@ void loop() {
 /* Author: Cheng Hao Yuan
  * reads lane change command from serial, if available.
  */
+int byte_read = 77;
 void read_lane_change_serial() {
+  // read serial and update command char, if any
   if (Serial.available() > 0) {
-    int byte_read = Serial.read();
-    if (byte_read == 76) { // 'L'
-      lane_ref = LEFT_LANE;
-      merge_state = 1;
-    } else if (byte_read == 77) { // 'M'
+    byte_read = Serial.read();
+  }
+  
+  // process command char
+  if (byte_read == 76) { // 'L'
+    lane_ref = LEFT_LANE;
+    merge_state = 1;
+  } else if (byte_read == 77) { // 'M'
+    if (number_of_lines == 2) {
+      lane_ref = CENTER_LANE;
+      merge_state = 0;
+    } else if (number_of_lines == 1) {
       if (merge_state == 1) { // currently in left, trying to return middle
-        if (number_of_lines == 1) {
-          lane_ref = RIGHT_LANE;
-        } else if (number_of_lines == 2) {
-          lane_ref = CENTER_LANE;
-          merge_state = 0;
-        }
+        lane_ref = RIGHT_LANE;
       } else if (merge_state == 2) { // currently in right, trying to return middle
-        if (number_of_lines == 1) {
-          lane_ref = LEFT_LANE;
-        } else if (number_of_lines == 2) {
-          lane_ref = CENTER_LANE;
-          merge_state = 0;
-        }
+        lane_ref = LEFT_LANE;
       }
-    } else if (byte_read == 82) { // 'R'
-      lane_ref = RIGHT_LANE;
-      merge_state = 2;
     }
-    Serial.print("Lane change to: ");
-    Serial.println(lane_ref);
+  } else if (byte_read == 82) { // 'R'
+    lane_ref = RIGHT_LANE;
+    merge_state = 2;
   }
 }
 
