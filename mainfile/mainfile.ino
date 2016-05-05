@@ -1,5 +1,5 @@
 /* ME 131 Spring 2016 Term Project
- * Autonomous Lane-Keeping and Obstacle Avoidance
+ * Autonomous Lane-Keeping and Obstacle Avoidance at Constant Velocity
  * Cheng Hao Yuan, Hohyun Song, Tony Abdo
  * 05/09/2016
  */
@@ -13,12 +13,12 @@
 
 // camera constants
 #define EXPOSURE_TIME_US  10000
-#define PEAK_CUTOFF       0.8
+#define PEAK_CUTOFF       0.5
 #define MAX_WIDTH_LIMIT   40
 #define MIN_WIDTH_LIMIT   1
-#define CENTER_LANE       73
-#define LEFT_LANE         120
-#define RIGHT_LANE        23
+#define CENTER_LANE       80
+#define LEFT_LANE         113
+#define RIGHT_LANE        50
 
 // controller gains
 #define STEERING_KP     0.5
@@ -56,13 +56,16 @@ const unsigned char PS_128 = (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
 Servo ESC, SERVO;
 volatile int encoder_count;
 int camera_data[128];
+int cutoff_height;
 float normalized_data[128];
 int cutoff_data[128];
-int lane_centers[3];
-int lane_center;
+int line_centers[2];
+int number_of_lines;
+int lat_pos;
 float ultrasonic_dist[4]; // front, left, right
 float velocity_ref;
 int lane_ref;
+int merge_state;
 
 unsigned long loop_start_time;
 
@@ -95,6 +98,7 @@ void setup() {
   encoder_count = 0;
   velocity_ref = 0;
   lane_ref = CENTER_LANE; // middle lane by default
+  merge_state = 0;
   
 
   // arming ESC and set initial posture
@@ -128,25 +132,38 @@ void loop() {
   read_camera();
   
   // process camera
-  process_camera_one_peak();
-  Serial.print("lane center: ");
-  Serial.println(lane_center);
+  process_camera();
+  Serial.print("line centers: ");
+  Serial.print(line_centers[0]);
+  Serial.print('\t');
+  Serial.print(line_centers[1]);
+  Serial.println();
+
+  Serial.print("num lines: ");
+  Serial.println(number_of_lines);
+  Serial.print("lane_ref: ");
+  Serial.println(lane_ref);
+  Serial.print("lat_pos: ");
+  Serial.println(lat_pos);
+  Serial.print("merge state: ");
+  Serial.println(merge_state);
   
 
   // read ultrasonics
   read_ultrasonic();
-  Serial.print("ultrasonic: ");
-  Serial.print(ultrasonic_dist[0]);
-  Serial.print('\t');
-  Serial.print(ultrasonic_dist[1]);
-  Serial.print('\t');
-  Serial.print(ultrasonic_dist[2]);
-  Serial.println();
+//  Serial.print("ultrasonic: ");
+//  Serial.print(ultrasonic_dist[0]);
+//  Serial.print('\t');
+//  Serial.print(ultrasonic_dist[1]);
+//  Serial.print('\t');
+//  Serial.print(ultrasonic_dist[2]);
+//  Serial.println();
   
   // high level steering strategy (lane selection and obstacle avoidance)
-  path_control();
+//  path_control();
 
   // low level lane keeping PID
+  determine_steering_ref();
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
   Serial.println(servo_write);
@@ -171,14 +188,31 @@ void loop() {
 /* Author: Cheng Hao Yuan
  * reads lane change command from serial, if available.
  */
+int byte_read = 77;
 void read_lane_change_serial() {
+  // read serial and update command char, if any
   if (Serial.available() > 0) {
-    int byte_read = Serial.read();
-    if (byte_read == 76) lane_ref = LEFT_LANE;
-    if (byte_read == 77) lane_ref = CENTER_LANE;
-    if (byte_read == 82) lane_ref = RIGHT_LANE;
-    Serial.print("Lane change to: ");
-    Serial.println(lane_ref);
+    byte_read = Serial.read();
+  }
+  
+  // process command char
+  if (byte_read == 76) { // 'L'
+    lane_ref = LEFT_LANE;
+    merge_state = 1;
+  } else if (byte_read == 77) { // 'M'
+    if (number_of_lines == 2) {
+      lane_ref = CENTER_LANE;
+      merge_state = 0;
+    } else if (number_of_lines == 1) {
+      if (merge_state == 1) { // currently in left, trying to return middle
+        lane_ref = RIGHT_LANE;
+      } else if (merge_state == 2) { // currently in right, trying to return middle
+        lane_ref = LEFT_LANE;
+      }
+    }
+  } else if (byte_read == 82) { // 'R'
+    lane_ref = RIGHT_LANE;
+    merge_state = 2;
   }
 }
 
@@ -309,13 +343,14 @@ int find_min(int *arr) {
 }
 
 /* Author: Cheng Hao Yuan
- * process camera data and produce three lane centers (L,M,R).
+ * process camera data and produce one or two line centers.
  * writes in global arrays, returns nothing.
  */
-void process_camera_three_peaks() {
-  // normalize data to 0.0-1.0
+void process_camera() {
   int max_reading = camera_data[find_max(camera_data)];
   int min_reading = camera_data[find_min(camera_data)];
+
+/*
   float height_diff = (float)max_reading - (float)min_reading;
   for (int i=0; i<128; i++) {
     normalized_data[i] = (float)(camera_data[i] - min_reading) / height_diff;
@@ -329,8 +364,26 @@ void process_camera_three_peaks() {
       cutoff_data[i] = 0;
     }
   }
+*/
 
-  // find three line centers
+  cutoff_height = min_reading + (int)((float)PEAK_CUTOFF * (float)(max_reading - min_reading));
+  for (int i=0; i<128; i++) {
+    cutoff_data[i] = camera_data[i] / cutoff_height;
+  }
+
+  // count number of line centers
+  int pi = 0, pj = 0;
+  number_of_lines = 0;
+  for (int i=0; i<128-1; i++) {
+    pi = cutoff_data[i];
+    pj = cutoff_data[i+1];
+    if ((pi == 0 && pj == 1) || (pi == 1 && pj == 0)) {
+      number_of_lines++;
+    }
+  }
+  number_of_lines /= 2;
+
+  // find line centers
   bool started1 = false;
   bool ended1 = false;
   int start1 = 0;
@@ -339,10 +392,8 @@ void process_camera_three_peaks() {
   bool ended2 = false;
   int start2 = 0;
   int end2 = 0;
-  bool started3 = false;
-  bool ended3 = false;
-  int start3 = 0;
-  int end3 = 0;
+  line_centers[0] = 0;
+  line_centers[1] = 0;
   for (int i=0; i<128; i++) {
     // first peak
     if (cutoff_data[i] == 1 && !started1) {
@@ -352,11 +403,11 @@ void process_camera_three_peaks() {
     if (cutoff_data[i] == 0 && started1) {
       end1 = i;
       if (end1 - start1 <= MAX_WIDTH_LIMIT && end1 - start1 >= MIN_WIDTH_LIMIT) {
-        lane_centers[0] = (start1+end1)/2;
+        line_centers[0] = (start1+end1)/2;
         ended1 = true;
       }
     }
-
+    
     // second peak
     if (cutoff_data[i] == 1 && !started2 && ended1) {
       started2 = true;
@@ -365,70 +416,14 @@ void process_camera_three_peaks() {
     if (cutoff_data[i] == 0 && started2) {
       end2 = i;
       if (end2 - start2 <= MAX_WIDTH_LIMIT && end2 - start2 >= MIN_WIDTH_LIMIT) {
-        lane_centers[1] = (start2+end2)/2;
+        line_centers[1] = (start2+end2)/2;
         ended2 = true;
       }
     }
-
-    // third peak
-    if (cutoff_data[i] == 1 && !started3 && ended2) {
-      started3 = true;
-      start3 = i;
-    }
-    if (cutoff_data[i] == 0 && started3) {
-      end3 = i;
-      if (end3 - start3 <= MAX_WIDTH_LIMIT && end3 - start3 >= MIN_WIDTH_LIMIT) {
-        lane_centers[2] = (start3+end3)/2;
-        ended3 = true;
-      }
-    }
   }
 }
 
 
-
-/* Author: Cheng Hao Yuan
- * process camera data and produce one line center.
- * writes in global var, returns nothing.
- */
-void process_camera_one_peak() {
-  // normalize data to 0.0-1.0
-  int max_reading = camera_data[find_max(camera_data)];
-  int min_reading = camera_data[find_min(camera_data)];
-  float height_diff = (float)max_reading - (float)min_reading;
-  for (int i=0; i<128; i++) {
-    normalized_data[i] = (float)(camera_data[i] - min_reading) / height_diff;
-  }
-
-  // cutoff data at threshold
-  for (int i=0; i<128; i++) {
-    if (normalized_data[i] > PEAK_CUTOFF) {
-      cutoff_data[i] = 1;
-    } else {
-      cutoff_data[i] = 0;
-    }
-  }
-
-  // find one line center
-  bool started1 = false;
-  bool ended1 = false;
-  int start1 = 0;
-  int end1 = 0;
-  for (int i=0; i<128; i++) {
-    // first peak
-    if (cutoff_data[i] == 1 && !started1) {
-      started1 = true;
-      start1 = i;
-    }
-    if (cutoff_data[i] == 0 && started1) {
-      end1 = i;
-      if (end1 - start1 <= MAX_WIDTH_LIMIT && end1 - start1 >= MIN_WIDTH_LIMIT) {
-        lane_center = (start1+end1)/2;
-        ended1 = true;
-      }
-    }    
-  }
-}
 
 
 /* Author: Hohyun Song, Cheng Hao Yuan
@@ -455,7 +450,6 @@ void read_ultrasonic() {
  * returns nothing.
  */
 
-int merge_state = 0; // 0 is merge not started, 1 is left-merge started, 2 is right-merge started
 bool obstacle_passed = false;
 unsigned long pass_time;
 
@@ -496,12 +490,33 @@ void path_control() {
 }
 
 /* Author: Cheng Hao Yuan
+ * uses line scan and high level state information to determine steering reference.
+ */
+void determine_steering_ref() {
+  if (number_of_lines == 2) {
+    lat_pos = (line_centers[0] + line_centers[1])/2;
+  } else if (number_of_lines == 1) {
+    lat_pos = line_centers[0];
+  }
+  if (merge_state == 0) { // no need to merge
+      lane_ref = CENTER_LANE;
+  } else if (merge_state == 1) { // merging left
+    lane_ref = LEFT_LANE;
+  } else if (merge_state == 2) { // merging right
+    lane_ref = RIGHT_LANE;
+  }
+}
+
+/* Author: Cheng Hao Yuan
  * uses lane_ref and lane_centers to determine lateral error.
  * produce steering angle (0.0-1.0) to reduce lateral error.
  */
+float e_lat_prev = 0;
 float steering_PID() {
-  float e_lat = (lane_ref - lane_center)/128.0;
-  float steering_signal = STEERING_KP * e_lat;
+  float e_lat = (lane_ref - lat_pos)/128.0;
+  float e_lat_d = (e_lat - e_lat_prev) / LOOP_PERIOD;
+  float steering_signal = STEERING_KP * e_lat + STEERING_KD * e_lat_d;
+  e_lat_prev = e_lat;
   return steering_signal;
 }
 
