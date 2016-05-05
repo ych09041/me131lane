@@ -21,7 +21,7 @@
 #define RIGHT_LANE        23
 
 // controller gains
-#define STEERING_KP     1
+#define STEERING_KP     0.5
 #define STEERING_KD     0
 #define VELOCITY_KP     0.1
 #define VELOCITY_KI     0
@@ -31,10 +31,9 @@
 #define SERVO_PIN     11
 #define ENCODER_FL    2
 #define ENCODER_FR    3
-#define ULTRASONIC_1  0  // A0
-#define ULTRASONIC_2  1  // A1
-#define ULTRASONIC_3  2  // A2
-#define ULTRASONIC_4  3  // A3
+#define ULTRASONIC_F  1  // A1
+#define ULTRASONIC_L  2  // A2
+#define ULTRASONIC_R  3  // A3
 #define CAMERA_AOUT   4  // A4
 #define CAMERA_SI     9
 #define CAMERA_CLK    4
@@ -61,7 +60,7 @@ float normalized_data[128];
 int cutoff_data[128];
 int lane_centers[3];
 int lane_center;
-float ultrasonic_dist[4];
+float ultrasonic_dist[4]; // front, left, right
 float velocity_ref;
 int lane_ref;
 
@@ -114,6 +113,9 @@ void setup() {
 }
 
 void loop() {
+
+//  ESC.write(98);
+  
   // set time stamp
   loop_start_time = millis();
   
@@ -132,10 +134,17 @@ void loop() {
   
 
   // read ultrasonics
-
-
+  read_ultrasonic();
+  Serial.print("ultrasonic: ");
+  Serial.print(ultrasonic_dist[0]);
+  Serial.print('\t');
+  Serial.print(ultrasonic_dist[1]);
+  Serial.print('\t');
+  Serial.print(ultrasonic_dist[2]);
+  Serial.println();
+  
   // high level steering strategy (lane selection and obstacle avoidance)
-
+  path_control();
 
   // low level lane keeping PID
   float steering_percent = steering_PID();
@@ -422,26 +431,68 @@ void process_camera_one_peak() {
 }
 
 
-/* Author:
+/* Author: Hohyun Song, Cheng Hao Yuan
  * reads all ultrasonic sensors, converts to meters, and store in global array ultrasonic_dist.
  * returns nothing.
  */
 void read_ultrasonic() {
-  // FIXME
-  
+  int sumF = 0, sumL = 0, sumR = 0;
+  for (unsigned int i = 0; i < 10 ; i++) {
+    sumF += analogRead(ULTRASONIC_F) / 2;
+    sumL += analogRead(ULTRASONIC_L) / 2;
+    sumR += analogRead(ULTRASONIC_R) / 2;
+  }
+  ultrasonic_dist[0] = (float)sumF / 10.0 * 0.0254;
+  ultrasonic_dist[1] = (float)sumL / 10.0 * 0.0254;
+  ultrasonic_dist[2] = (float)sumR / 10.0 * 0.0254;
 }
 
 
-/* Author:
+/* Author: Hohyun Song, Cheng Hao Yuan
  * takes lane positions and ultrasonic clearance distances and logically decide which lane position to use.
  * sets the velocity_ref and lane_ref (globals).
  * this is the logic for obstacle avoidance and lane selection (and stopping if can't merge).
  * returns nothing.
  */
-void path_control() {
-  // FIXME
-  
 
+int merge_state = 0; // 0 is merge not started, 1 is left-merge started, 2 is right-merge started
+bool obstacle_passed = false;
+unsigned long pass_time;
+
+void path_control() {
+  if (ultrasonic_dist[0] < 0.40) {
+    if (ultrasonic_dist[1] > 0.30) {
+      lane_ref = LEFT_LANE;
+      Serial.println("Merging left");
+      merge_state = 1;
+      obstacle_passed = false;
+    } else if (ultrasonic_dist[2] > 0.30) {
+      lane_ref = RIGHT_LANE;
+      Serial.println("Merging right");
+      merge_state = 2;
+      obstacle_passed = false;
+    } else {
+      motor_brake();
+    }
+  } else {
+    if (merge_state == 1) {
+      if (ultrasonic_dist[2] < 0.20) {
+        obstacle_passed = true;
+        pass_time = millis();
+      }
+    } else if (merge_state == 2) {
+      if (ultrasonic_dist[1] < 0.20) {
+        obstacle_passed = true;
+        pass_time = millis();
+      }
+    }
+    if (millis() - pass_time > 500) {
+      lane_ref = CENTER_LANE;
+      Serial.println("Returning to middle");
+      merge_state = 0;
+      obstacle_passed = false;
+    }
+  }
 }
 
 /* Author: Cheng Hao Yuan
