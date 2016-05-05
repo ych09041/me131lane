@@ -21,8 +21,8 @@
 // controller gains
 #define STEERING_KP     1
 #define STEERING_KD     0
-#define VELOCITY_KP     10.0
-#define VELOCITY_KI     50.0
+#define VELOCITY_KP     .12
+#define VELOCITY_KI     0.15
 
 // pinout definitions
 #define ESC_PIN       10
@@ -62,9 +62,9 @@ unsigned long loop_start_time;
 float ITerm = 0.0;
 float currVelocity = 0.0;
 float lastInput =0.0;
-float MOTORINTEGRALMIN = -1000.0;
-float MOTORINTEGRALMAX = 1000.0;
-float TICKTOMETERS = .07253/4.0;
+float MOTORINTEGRALMIN = -.6;
+float MOTORINTEGRALMAX = .6;
+float TICKTOMETERS = .07253/8.0;
 float currPos = 0.0;
 float prevPos = 0.0;
 #define VELOCITY_KD     0.0
@@ -88,8 +88,8 @@ void setup() {
   // attach interrupts and servos
   ESC.attach(ESC_PIN);
   SERVO.attach(SERVO_PIN);
-  attachInterrupt(0, encoderISR, CHANGE); // D2, FL
-  attachInterrupt(1, encoderISR, CHANGE); // D3, FR
+  attachInterrupt(0, encoderISR1, CHANGE); // D2, FL
+  attachInterrupt(1, encoderISR2, CHANGE); // D3, FR
 
 
   // initialize velocity control variables
@@ -116,16 +116,20 @@ void setup() {
 void loop() {
   // set time stamp
   loop_start_time = millis();
-
+  set_servo(120);
   float currPos = encoder_count*TICKTOMETERS;
 
   currVelocity = (currPos-prevPos)/LOOP_PERIOD;
   prevPos = currPos;
   
-  ESC.write((int)myMap(motor_PID(velocity_ref,currVelocity), 0.0, 255.0,MIN_THROTTLE, MAX_THROTTLE ));
+//  ESC.write((int)myMap(motor_PID(velocity_ref,currVelocity), 0.0, 255.0,MIN_THROTTLE, MAX_THROTTLE ));
 //  ESC.write(100);
-  Serial.println(myMap(motor_PID(velocity_ref,currVelocity), 0.0, 255.0,MIN_THROTTLE, MAX_THROTTLE ));
+//  Serial.println(myMap(motor_PID(velocity_ref,currVelocity), 0.0, 255.0,MIN_THROTTLE, MAX_THROTTLE ));
+  motor_forward(motor_PID(velocity_ref,currVelocity));
+  Serial.print("Velocity");
   Serial.println(currVelocity);
+  Serial.print("Encoder");
+  Serial.println(encoder_count);
   
   // wait for long enough to fulfill loop period
 //  Serial.println(millis()-loop_start_time);
@@ -162,9 +166,13 @@ void read_lane_change_serial() {
  * returns nothing.
  */
 void motor_forward(float pwm) {
-  if (pwm < MIN_THROTTLE) pwm = MIN_THROTTLE;
-  if (pwm > MAX_THROTTLE) pwm = MAX_THROTTLE;
-  ESC.write(pwm);
+  int command = (int)myMap(pwm, 0.0, 1.0,90.0, 180.0 );
+  
+  if (command < MIN_THROTTLE) command = MIN_THROTTLE;
+  if (command > MAX_THROTTLE) command = MAX_THROTTLE;
+  Serial.print("Command");
+  Serial.println(command);
+  ESC.write(command);
 }
 
 /* Author: Cheng Hao Yuan
@@ -176,15 +184,22 @@ void motor_brake() {
   while(1);
 }
 
-
+unsigned long velocity_timestamp = 0;
 /* Author: Cheng Hao Yuan
  * ISR for both wheel encoders. Increments encoder_count by 1 when called.
  * returns nothing.
  */
-void encoderISR() {
+void encoderISR1() {
   encoder_count++;
+//  currVelocity = 1000000.0*TICKTOMETERS/(micros()-velocity_timestamp);
+//  velocity_timestamp = micros();
 }
 
+void encoderISR2() {
+  encoder_count++;
+//  currVelocity = 1000000.0*TICKTOMETERS/(micros()-velocity_timestamp);
+//  velocity_timestamp = micros();
+}
 
 /* Author: Tony Abdo
  * computes throttle PID based on velocity setpoint (arg) and encoder count (global).
@@ -195,8 +210,10 @@ float motor_PID(float velocity_setpoint, float input) {
   /*Compute all the working error variables*/
   float error = velocity_setpoint - input;
   ITerm+= (VELOCITY_KI * error*LOOP_PERIOD);
-  Serial.println("Iterm");
+  Serial.print("Iterm");
   Serial.println(ITerm);
+  Serial.print("Error");
+  Serial.println(error);
   if(ITerm > MOTORINTEGRALMAX) ITerm= MOTORINTEGRALMAX;
   else if(ITerm < MOTORINTEGRALMIN) ITerm= MOTORINTEGRALMIN;
   float dInput = (input - lastInput);
@@ -204,8 +221,8 @@ float motor_PID(float velocity_setpoint, float input) {
   /*Compute PID Output*/
   float output = (VELOCITY_KP*error + ITerm- VELOCITY_KD*dInput/LOOP_PERIOD);
   
-if(output > 255.0) output = 255.0;
-  else if(output < -255.0) output = -255.0;
+if(output > 1.0) output = 1.0;
+  else if(output < -1.0) output = -1.0;
   
   /*Remember for next time*/
   lastInput = input;
