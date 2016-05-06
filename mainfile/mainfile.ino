@@ -17,14 +17,14 @@
 #define MAX_WIDTH_LIMIT   40
 #define MIN_WIDTH_LIMIT   1
 #define CENTER_LANE       80
-#define LEFT_LANE         113
-#define RIGHT_LANE        50
+#define LEFT_LANE         110
+#define RIGHT_LANE        53
 
 // controller gains
 #define STEERING_KP     0.5
 #define STEERING_KD     0
-#define VELOCITY_KP     0.1
-#define VELOCITY_KI     0
+#define VELOCITY_KP     .12
+#define VELOCITY_KI     0.15
 #define VELOCITY_KD     0.0
 
 // pinout definitions
@@ -72,6 +72,7 @@ float ultrasonic_dist[4]; // front, left, right
 float velocity_ref;
 int lane_ref;
 int merge_state;
+bool run_motor_PID;
 
 unsigned long loop_start_time;
 
@@ -118,7 +119,7 @@ void setup() {
   velocity_ref = 0.5;
   lane_ref = CENTER_LANE; // middle lane by default
   merge_state = 0;
-  
+  run_motor_PID = true;
 
   // arming ESC and set initial posture
   SERVO.write(90);
@@ -165,13 +166,13 @@ void loop() {
   // read serial commands ('L', 'M', 'R')
 //  read_serial_command();  
   
-  Serial.print("ultrasonic: ");
-  Serial.print(ultrasonic_dist[0]);
-  Serial.print('\t');
-  Serial.print(ultrasonic_dist[1]);
-  Serial.print('\t');
-  Serial.print(ultrasonic_dist[2]);
-  Serial.println();
+//  Serial.print("ultrasonic: ");
+//  Serial.print(ultrasonic_dist[0]);
+//  Serial.print('\t');
+//  Serial.print(ultrasonic_dist[1]);
+//  Serial.print('\t');
+//  Serial.print(ultrasonic_dist[2]);
+//  Serial.println();
 
   // read ultrasonic sensors
   read_ultrasonics();
@@ -186,21 +187,25 @@ void loop() {
 //  Serial.println(servo_write);
   set_servo(servo_write);
 
+  
+  // velocity control, compute and set throttle, every other loop
+  if (true) {
+    currPos = (encoder_count1 + encoder_count2)*TICKTOMETERS/2;
+    
+    currVelocity = (currPos-prevPos)/LOOP_PERIOD;
+    prevPos = currPos;
+    float motor_output = motor_PID(velocity_ref,currVelocity);
+    motor_forward(motor_output);
+  }
+  run_motor_PID = !run_motor_PID;
 
-  // velocity control, compute and set throttle
-  currPos = (encoder_count1 + encoder_count2)*TICKTOMETERS/2;
-
-  currVelocity = (currPos-prevPos)/LOOP_PERIOD;
-  prevPos = currPos;
-  float motor_output = motor_PID(velocity_ref,currVelocity);
-  motor_forward(motor_output);
 //  Serial.print("Velocity");
 //  Serial.println(currVelocity);
-  Serial.print("Encoders");
-  Serial.print(encoder_count1);
-  Serial.print('\t');
-  Serial.println(encoder_count2);
-//  ESC.write(98);
+//  Serial.print("Encoders");
+//  Serial.print(encoder_count1);
+//  Serial.print('\t');
+//  Serial.println(encoder_count2);
+
 
   // wait for long enough to fulfill loop period
   Serial.print("Loop usage us: ");
@@ -287,8 +292,8 @@ void motor_forward(float pwm) {
   
   if (command < MIN_THROTTLE) command = MIN_THROTTLE;
   if (command > MAX_THROTTLE) command = MAX_THROTTLE;
-//  Serial.print("Command");
-//  Serial.println(command);
+  Serial.print("motor write: ");
+  Serial.println(command);
   ESC.write(command);
 }
 
@@ -329,7 +334,7 @@ void encoderISR2() {
 float motor_PID(float velocity_setpoint, float input) {
   /*Compute all the working error variables*/
   float error = velocity_setpoint - input;
-  ITerm+= (VELOCITY_KI * error*LOOP_PERIOD);
+  ITerm+= (VELOCITY_KI * error*(LOOP_PERIOD*2)); // x2 because every other loop
 //  Serial.print("Iterm");
 //  Serial.println(ITerm);
 //  Serial.print("Error");
@@ -339,7 +344,7 @@ float motor_PID(float velocity_setpoint, float input) {
   float dInput = (input - lastInput);
 
   /*Compute PID Output*/
-  float output = (VELOCITY_KP*error + ITerm- VELOCITY_KD*dInput/LOOP_PERIOD);
+  float output = (VELOCITY_KP*error + ITerm- VELOCITY_KD*dInput/(LOOP_PERIOD*2)); // x2 because every other loop
   
   if(output > 1.0) output = 1.0;
   else if(output < -1.0) output = -1.0;
