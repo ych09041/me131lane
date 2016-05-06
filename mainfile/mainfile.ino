@@ -25,6 +25,7 @@
 #define STEERING_KD     0
 #define VELOCITY_KP     0.1
 #define VELOCITY_KI     0
+#define VELOCITY_KD     0.0
 
 // pinout definitions
 #define ESC_PIN       10
@@ -45,6 +46,10 @@
 #define MAX_THROTTLE  130
 #define MIN_THROTTLE  90
 
+// ultrasonic obstacle detection thresholds
+#define FRONT_SPACE   0.60  // meters
+#define SIDE_SPACE    0.30
+
 // Define ADC prescaler
 const unsigned char PS_16 = (1 << ADPS2);
 const unsigned char PS_32 = (1 << ADPS2) | (1 << ADPS0);
@@ -54,7 +59,8 @@ const unsigned char PS_128 = (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
 
 // global storage
 Servo ESC, SERVO;
-volatile int encoder_count;
+volatile int encoder_count1;
+volatile int encoder_count2;
 int camera_data[128];
 int cutoff_height;
 float normalized_data[128];
@@ -75,10 +81,10 @@ float currVelocity = 0.0;
 float lastInput =0.0;
 float MOTORINTEGRALMIN = -.6;
 float MOTORINTEGRALMAX = .6;
-float TICKTOMETERS = .07253/8.0;
+float TICKTOMETERS = .07253/4.0*3.1415;
 float currPos = 0.0;
 float prevPos = 0.0;
-#define VELOCITY_KD     0.0
+
 
 
 
@@ -107,7 +113,8 @@ void setup() {
 
 
   // initialize velocity control variables
-  encoder_count = 0;
+  encoder_count1 = 0;
+  encoder_count2 = 0;
   velocity_ref = 0.5;
   lane_ref = CENTER_LANE; // middle lane by default
   merge_state = 0;
@@ -139,57 +146,60 @@ void loop() {
   
   // process camera
   process_camera();
-  Serial.print("line centers: ");
-  Serial.print(line_centers[0]);
-  Serial.print('\t');
-  Serial.print(line_centers[1]);
-  Serial.println();
+//  Serial.print("line centers: ");
+//  Serial.print(line_centers[0]);
+//  Serial.print('\t');
+//  Serial.print(line_centers[1]);
+//  Serial.println();
 
-  Serial.print("num lines: ");
-  Serial.println(number_of_lines);
-  Serial.print("lane_ref: ");
-  Serial.println(lane_ref);
-  Serial.print("lat_pos: ");
-  Serial.println(lat_pos);
+//  Serial.print("num lines: ");
+//  Serial.println(number_of_lines);
+//  Serial.print("lane_ref: ");
+//  Serial.println(lane_ref);
+//  Serial.print("lat_pos: ");
+//  Serial.println(lat_pos);
   Serial.print("merge state: ");
   Serial.println(merge_state);
   
 
   // read serial commands ('L', 'M', 'R')
-  read_serial_command();  
+//  read_serial_command();  
   
-//  Serial.print("ultrasonic: ");
-//  Serial.print(ultrasonic_dist[0]);
-//  Serial.print('\t');
-//  Serial.print(ultrasonic_dist[1]);
-//  Serial.print('\t');
-//  Serial.print(ultrasonic_dist[2]);
-//  Serial.println();
+  Serial.print("ultrasonic: ");
+  Serial.print(ultrasonic_dist[0]);
+  Serial.print('\t');
+  Serial.print(ultrasonic_dist[1]);
+  Serial.print('\t');
+  Serial.print(ultrasonic_dist[2]);
+  Serial.println();
 
   // read ultrasonic sensors
   read_ultrasonics();
   
   // high level steering strategy (lane selection and obstacle avoidance)
   path_control_by_ultrasonics();
-  process_command();
+  
 
   // low level lane keeping PID
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
-  Serial.println(servo_write);
+//  Serial.println(servo_write);
   set_servo(servo_write);
 
 
   // velocity control, compute and set throttle
-  float currPos = encoder_count*TICKTOMETERS;
+  currPos = (encoder_count1 + encoder_count2)*TICKTOMETERS/2;
 
   currVelocity = (currPos-prevPos)/LOOP_PERIOD;
   prevPos = currPos;
-  motor_forward(motor_PID(velocity_ref,currVelocity));
+  float motor_output = motor_PID(velocity_ref,currVelocity);
+  motor_forward(motor_output);
 //  Serial.print("Velocity");
 //  Serial.println(currVelocity);
-//  Serial.print("Encoder");
-//  Serial.println(encoder_count);
+  Serial.print("Encoders");
+  Serial.print(encoder_count1);
+  Serial.print('\t');
+  Serial.println(encoder_count2);
 //  ESC.write(98);
 
   // wait for long enough to fulfill loop period
@@ -215,9 +225,7 @@ void read_serial_command() {
   if (Serial.available() > 0) {
     command = Serial.read();
   }
-}
-
-void process_command() {
+  
   if (command == 76) { // 'L'
     merge_to_left();
   } else if (command == 77) { // 'M'
@@ -299,7 +307,7 @@ void motor_brake() {
  * returns nothing.
  */
 void encoderISR1() {
-  encoder_count++;
+  encoder_count1++;
 }
 
 /*
@@ -307,7 +315,7 @@ void encoderISR1() {
  * ISR for other whell. Ensures that both interrupts are heard
  */
 void encoderISR2() {
-  encoder_count++;
+  encoder_count2++;
 //  currVelocity = 1000000.0*TICKTOMETERS/(micros()-velocity_timestamp);
 //  velocity_timestamp = micros();
 }
@@ -322,10 +330,10 @@ float motor_PID(float velocity_setpoint, float input) {
   /*Compute all the working error variables*/
   float error = velocity_setpoint - input;
   ITerm+= (VELOCITY_KI * error*LOOP_PERIOD);
-  Serial.print("Iterm");
-  Serial.println(ITerm);
-  Serial.print("Error");
-  Serial.println(error);
+//  Serial.print("Iterm");
+//  Serial.println(ITerm);
+//  Serial.print("Error");
+//  Serial.println(error);
   if(ITerm > MOTORINTEGRALMAX) ITerm= MOTORINTEGRALMAX;
   else if(ITerm < MOTORINTEGRALMIN) ITerm= MOTORINTEGRALMIN;
   float dInput = (input - lastInput);
@@ -333,7 +341,7 @@ float motor_PID(float velocity_setpoint, float input) {
   /*Compute PID Output*/
   float output = (VELOCITY_KP*error + ITerm- VELOCITY_KD*dInput/LOOP_PERIOD);
   
-if(output > 1.0) output = 1.0;
+  if(output > 1.0) output = 1.0;
   else if(output < -1.0) output = -1.0;
   
   /*Remember for next time*/
@@ -515,27 +523,31 @@ void read_ultrasonics() {
  * returns nothing.
  */
 
-bool obstacle_passed = true;
-unsigned long pass_time;
+
+float start_merge_pos = 0.0;
 
 void path_control_by_ultrasonics() {
-  if (ultrasonic_dist[0] < 0.40) { // front less than 40cm
-    if (ultrasonic_dist[1] > 0.30) { // left is open
+  if (ultrasonic_dist[0] < FRONT_SPACE) { // if front is blocked
+    if (ultrasonic_dist[1] > SIDE_SPACE) { // if left side is open
+//      Serial.println("gon merge left11111111111111111111111111");
       merge_to_left();
-      obstacle_passed = false;
-    } else if (ultrasonic_dist[2] > 0.30) {
+    } else if (ultrasonic_dist[2] > SIDE_SPACE) { // if right side is open
+//      Serial.println("gon merge right2222222222222222222222222");
       merge_to_right();
-      obstacle_passed = false;
-    } else {
+    } else { // all blocked, stop
       Serial.println("Emergency stop");
       motor_brake();
     }
+    start_merge_pos = currPos;
   }
-
-  if (!obstacle_passed) {
-    // use distance to initiate a merge-back
-  }
-  
+  Serial.print("currPos:");
+  Serial.println(currPos);
+  if (currPos - start_merge_pos > FRONT_SPACE) { // attempt merge back
+    if ((merge_state == 1 && ultrasonic_dist[2] > SIDE_SPACE) || (merge_state == 2 && ultrasonic_dist[1] > SIDE_SPACE)){
+//      Serial.println("gon merge mid00000000000000000000000000000");
+      merge_to_middle();
+    }
+  }  
 }
 
 
