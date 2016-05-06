@@ -129,19 +129,6 @@ void setup() {
 }
 
 void loop() {
-// Velocity Control
-  float currPos = encoder_count*TICKTOMETERS;
-
-  currVelocity = (currPos-prevPos)/LOOP_PERIOD;
-  prevPos = currPos;
-  motor_forward(motor_PID(velocity_ref,currVelocity));
-//  Serial.print("Velocity");
-//  Serial.println(currVelocity);
-//  Serial.print("Encoder");
-//  Serial.println(encoder_count);
-//  ESC.write(98);
-
-//Original Code
   // set time stamp
   loop_start_time = millis();
   
@@ -193,8 +180,17 @@ void loop() {
   set_servo(servo_write);
 
 
-  // compute and set throttle
+  // velocity control, compute and set throttle
+  float currPos = encoder_count*TICKTOMETERS;
 
+  currVelocity = (currPos-prevPos)/LOOP_PERIOD;
+  prevPos = currPos;
+  motor_forward(motor_PID(velocity_ref,currVelocity));
+//  Serial.print("Velocity");
+//  Serial.println(currVelocity);
+//  Serial.print("Encoder");
+//  Serial.println(encoder_count);
+//  ESC.write(98);
 
   // wait for long enough to fulfill loop period
   Serial.print("Loop usage us: ");
@@ -256,14 +252,6 @@ void merge_to_middle() {
 }
 
 
-/*
- * Author: Tony Abdo
- * scales x originally in range of [in_min, in_max] to [out_min, out_max]
- */
-double myMap(double x, double in_min, double in_max, double out_min, double out_max)
-{
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
 /* Author: Cheng Hao Yuan
  * helper function that sets state machine to track right lane
  */
@@ -271,6 +259,14 @@ void merge_to_right() {
   lane_ref = RIGHT_LANE;
   merge_state = 2;
 
+}
+
+
+/* Author: Tony Abdo
+ * scales x originally in range of [in_min, in_max] to [out_min, out_max]
+ */
+double myMap(double x, double in_min, double in_max, double out_min, double out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 /* Author: Tony Abdo
