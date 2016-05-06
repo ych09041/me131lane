@@ -69,6 +69,18 @@ int merge_state;
 
 unsigned long loop_start_time;
 
+// Added by Tony
+float ITerm = 0.0;
+float currVelocity = 0.0;
+float lastInput =0.0;
+float MOTORINTEGRALMIN = -.6;
+float MOTORINTEGRALMAX = .6;
+float TICKTOMETERS = .07253/8.0;
+float currPos = 0.0;
+float prevPos = 0.0;
+#define VELOCITY_KD     0.0
+
+
 
 void setup() {
   // begin serial
@@ -90,13 +102,13 @@ void setup() {
   // attach interrupts and servos
   ESC.attach(ESC_PIN);
   SERVO.attach(SERVO_PIN);
-  attachInterrupt(0, encoderISR, CHANGE); // D2, FL
-  attachInterrupt(1, encoderISR, CHANGE); // D3, FR
+  attachInterrupt(0, encoderISR1, CHANGE); // D2, FL
+  attachInterrupt(1, encoderISR2, CHANGE); // D3, FR
 
 
   // initialize velocity control variables
   encoder_count = 0;
-  velocity_ref = 0;
+  velocity_ref = 0.5;
   lane_ref = CENTER_LANE; // middle lane by default
   merge_state = 0;
   
@@ -117,9 +129,19 @@ void setup() {
 }
 
 void loop() {
+// Velocity Control
+  float currPos = encoder_count*TICKTOMETERS;
 
+  currVelocity = (currPos-prevPos)/LOOP_PERIOD;
+  prevPos = currPos;
+  motor_forward(motor_PID(velocity_ref,currVelocity));
+//  Serial.print("Velocity");
+//  Serial.println(currVelocity);
+//  Serial.print("Encoder");
+//  Serial.println(encoder_count);
 //  ESC.write(98);
-  
+
+//Original Code
   // set time stamp
   loop_start_time = millis();
   
@@ -233,23 +255,37 @@ void merge_to_middle() {
   }
 }
 
+
+/*
+ * Author: Tony Abdo
+ * scales x originally in range of [in_min, in_max] to [out_min, out_max]
+ */
+double myMap(double x, double in_min, double in_max, double out_min, double out_max)
+{
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 /* Author: Cheng Hao Yuan
  * helper function that sets state machine to track right lane
  */
 void merge_to_right() {
   lane_ref = RIGHT_LANE;
   merge_state = 2;
+
 }
 
-/* Author: Cheng Hao Yuan
+/* Author: Tony Abdo
  * float pwm is between 0.0 and 1.0, where 0.0 is coasting, and 1.0 is full throttle forward.
  * converts float pwm to analogWrite(0-255).
  * returns nothing.
  */
 void motor_forward(float pwm) {
-  if (pwm < MIN_THROTTLE) pwm = MIN_THROTTLE;
-  if (pwm > MAX_THROTTLE) pwm = MAX_THROTTLE;
-  ESC.write(pwm);
+  int command = (int)myMap(pwm, 0.0, 1.0,90.0, 180.0 );
+  
+  if (command < MIN_THROTTLE) command = MIN_THROTTLE;
+  if (command > MAX_THROTTLE) command = MAX_THROTTLE;
+//  Serial.print("Command");
+//  Serial.println(command);
+  ESC.write(command);
 }
 
 /* Author: Cheng Hao Yuan
@@ -262,24 +298,52 @@ void motor_brake() {
 }
 
 
-/* Author: Cheng Hao Yuan
- * ISR for both wheel encoders. Increments encoder_count by 1 when called.
+/* Author: Tony Abdo
+ * ISR for one wheel encoder. Increments encoder_count by 1 when called.
  * returns nothing.
  */
-void encoderISR() {
+void encoderISR1() {
   encoder_count++;
 }
 
+/*
+ * Author: Tony Abdo
+ * ISR for other whell. Ensures that both interrupts are heard
+ */
+void encoderISR2() {
+  encoder_count++;
+//  currVelocity = 1000000.0*TICKTOMETERS/(micros()-velocity_timestamp);
+//  velocity_timestamp = micros();
+}
 
-/* Author:
+
+/* Author: Tony Abdo
  * computes throttle PID based on velocity setpoint (arg) and encoder count (global).
  * velocity is computed inside this function, the velocity global is updated.
  * returns throttle as float in range of 0.0-1.0
  */
-float motor_PID(float velocity_setpoint) {
-  // FIXME
+float motor_PID(float velocity_setpoint, float input) {
+  /*Compute all the working error variables*/
+  float error = velocity_setpoint - input;
+  ITerm+= (VELOCITY_KI * error*LOOP_PERIOD);
+  Serial.print("Iterm");
+  Serial.println(ITerm);
+  Serial.print("Error");
+  Serial.println(error);
+  if(ITerm > MOTORINTEGRALMAX) ITerm= MOTORINTEGRALMAX;
+  else if(ITerm < MOTORINTEGRALMIN) ITerm= MOTORINTEGRALMIN;
+  float dInput = (input - lastInput);
+
+  /*Compute PID Output*/
+  float output = (VELOCITY_KP*error + ITerm- VELOCITY_KD*dInput/LOOP_PERIOD);
   
-  return 0.0;
+if(output > 1.0) output = 1.0;
+  else if(output < -1.0) output = -1.0;
+  
+  /*Remember for next time*/
+  lastInput = input;
+  
+  return output;
 }
 
 
