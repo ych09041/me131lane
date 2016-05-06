@@ -145,9 +145,6 @@ void loop() {
   // set time stamp
   loop_start_time = millis();
   
-  // take in and process Serial commands ('L', 'M', 'R')
-  read_lane_change_serial();
-
   // read camera
   clear_camera();
   delayMicroseconds(EXPOSURE_TIME_US);
@@ -171,8 +168,9 @@ void loop() {
   Serial.println(merge_state);
   
 
-  // read ultrasonics
-  read_ultrasonic();
+  // read serial commands ('L', 'M', 'R')
+  read_serial_command();  
+  
 //  Serial.print("ultrasonic: ");
 //  Serial.print(ultrasonic_dist[0]);
 //  Serial.print('\t');
@@ -180,12 +178,15 @@ void loop() {
 //  Serial.print('\t');
 //  Serial.print(ultrasonic_dist[2]);
 //  Serial.println();
+
+  // read ultrasonic sensors
+  read_ultrasonics();
   
   // high level steering strategy (lane selection and obstacle avoidance)
-//  path_control();
+  path_control_by_ultrasonics();
+  process_command();
 
   // low level lane keeping PID
-  determine_steering_ref();
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
   Serial.println(servo_write);
@@ -203,40 +204,57 @@ void loop() {
 }
 
 
-
+////////////////////////////////////////////////////////////////////////
+////////////////////////// Utitlities //////////////////////////////////
+////////////////////////////////////////////////////////////////////////
 
 
 
 /* Author: Cheng Hao Yuan
  * reads lane change command from serial, if available.
  */
-int byte_read = 77;
-void read_lane_change_serial() {
+int command = 77;
+void read_serial_command() {
   // read serial and update command char, if any
   if (Serial.available() > 0) {
-    byte_read = Serial.read();
-  }
-  
-  // process command char
-  if (byte_read == 76) { // 'L'
-    lane_ref = LEFT_LANE;
-    merge_state = 1;
-  } else if (byte_read == 77) { // 'M'
-    if (number_of_lines == 2) {
-      lane_ref = CENTER_LANE;
-      merge_state = 0;
-    } else if (number_of_lines == 1) {
-      if (merge_state == 1) { // currently in left, trying to return middle
-        lane_ref = RIGHT_LANE;
-      } else if (merge_state == 2) { // currently in right, trying to return middle
-        lane_ref = LEFT_LANE;
-      }
-    }
-  } else if (byte_read == 82) { // 'R'
-    lane_ref = RIGHT_LANE;
-    merge_state = 2;
+    command = Serial.read();
   }
 }
+
+void process_command() {
+  if (command == 76) { // 'L'
+    merge_to_left();
+  } else if (command == 77) { // 'M'
+    merge_to_middle();
+  } else if (command == 82) { // 'R'
+    merge_to_right();
+  }
+}
+
+/* Author: Cheng Hao Yuan
+ * helper function that sets state machine to track left lane
+ */
+void merge_to_left() {
+  lane_ref = LEFT_LANE;
+  merge_state = 1;
+}
+
+/* Author: Cheng Hao Yuan
+ * helper function that sets state machine to track/return to center lane
+ */
+void merge_to_middle() {
+  if (number_of_lines == 2) {
+    lane_ref = CENTER_LANE;
+    merge_state = 0;
+  } else if (number_of_lines == 1) {
+    if (merge_state == 1) { // currently in left, trying to return middle
+      lane_ref = RIGHT_LANE;
+    } else if (merge_state == 2) { // currently in right, trying to return middle
+      lane_ref = LEFT_LANE;
+    }
+  }
+}
+
 
 /*
  * Author: Tony Abdo
@@ -245,6 +263,14 @@ void read_lane_change_serial() {
 double myMap(double x, double in_min, double in_max, double out_min, double out_max)
 {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+/* Author: Cheng Hao Yuan
+ * helper function that sets state machine to track right lane
+ */
+void merge_to_right() {
+  lane_ref = RIGHT_LANE;
+  merge_state = 2;
+
 }
 
 /* Author: Tony Abdo
@@ -411,23 +437,6 @@ int find_min(int *arr) {
 void process_camera() {
   int max_reading = camera_data[find_max(camera_data)];
   int min_reading = camera_data[find_min(camera_data)];
-
-/*
-  float height_diff = (float)max_reading - (float)min_reading;
-  for (int i=0; i<128; i++) {
-    normalized_data[i] = (float)(camera_data[i] - min_reading) / height_diff;
-  }
-
-  // cutoff data at threshold
-  for (int i=0; i<128; i++) {
-    if (normalized_data[i] > PEAK_CUTOFF) {
-      cutoff_data[i] = 1;
-    } else {
-      cutoff_data[i] = 0;
-    }
-  }
-*/
-
   cutoff_height = min_reading + (int)((float)PEAK_CUTOFF * (float)(max_reading - min_reading));
   for (int i=0; i<128; i++) {
     cutoff_data[i] = camera_data[i] / cutoff_height;
@@ -486,13 +495,11 @@ void process_camera() {
 }
 
 
-
-
 /* Author: Hohyun Song, Cheng Hao Yuan
  * reads all ultrasonic sensors, converts to meters, and store in global array ultrasonic_dist.
  * returns nothing.
  */
-void read_ultrasonic() {
+void read_ultrasonics() {
   int sumF = 0, sumL = 0, sumR = 0;
   for (unsigned int i = 0; i < 10 ; i++) {
     sumF += analogRead(ULTRASONIC_F) / 2;
@@ -512,62 +519,30 @@ void read_ultrasonic() {
  * returns nothing.
  */
 
-bool obstacle_passed = false;
+bool obstacle_passed = true;
 unsigned long pass_time;
 
-void path_control() {
-  if (ultrasonic_dist[0] < 0.40) {
-    if (ultrasonic_dist[1] > 0.30) {
-      lane_ref = LEFT_LANE;
-      Serial.println("Merging left");
-      merge_state = 1;
+void path_control_by_ultrasonics() {
+  if (ultrasonic_dist[0] < 0.40) { // front less than 40cm
+    if (ultrasonic_dist[1] > 0.30) { // left is open
+      merge_to_left();
       obstacle_passed = false;
     } else if (ultrasonic_dist[2] > 0.30) {
-      lane_ref = RIGHT_LANE;
-      Serial.println("Merging right");
-      merge_state = 2;
+      merge_to_right();
       obstacle_passed = false;
     } else {
+      Serial.println("Emergency stop");
       motor_brake();
     }
-  } else {
-    if (merge_state == 1) {
-      if (ultrasonic_dist[2] < 0.20) {
-        obstacle_passed = true;
-        pass_time = millis();
-      }
-    } else if (merge_state == 2) {
-      if (ultrasonic_dist[1] < 0.20) {
-        obstacle_passed = true;
-        pass_time = millis();
-      }
-    }
-    if (millis() - pass_time > 500) {
-      lane_ref = CENTER_LANE;
-      Serial.println("Returning to middle");
-      merge_state = 0;
-      obstacle_passed = false;
-    }
   }
+
+  if (!obstacle_passed) {
+    // use distance to initiate a merge-back
+  }
+  
 }
 
-/* Author: Cheng Hao Yuan
- * uses line scan and high level state information to determine steering reference.
- */
-void determine_steering_ref() {
-  if (number_of_lines == 2) {
-    lat_pos = (line_centers[0] + line_centers[1])/2;
-  } else if (number_of_lines == 1) {
-    lat_pos = line_centers[0];
-  }
-  if (merge_state == 0) { // no need to merge
-      lane_ref = CENTER_LANE;
-  } else if (merge_state == 1) { // merging left
-    lane_ref = LEFT_LANE;
-  } else if (merge_state == 2) { // merging right
-    lane_ref = RIGHT_LANE;
-  }
-}
+
 
 /* Author: Cheng Hao Yuan
  * uses lane_ref and lane_centers to determine lateral error.
@@ -575,6 +550,11 @@ void determine_steering_ref() {
  */
 float e_lat_prev = 0;
 float steering_PID() {
+  if (number_of_lines == 2) {
+    lat_pos = (line_centers[0] + line_centers[1])/2;
+  } else if (number_of_lines == 1) {
+    lat_pos = line_centers[0];
+  }
   float e_lat = (lane_ref - lat_pos)/128.0;
   float e_lat_d = (e_lat - e_lat_prev) / LOOP_PERIOD;
   float steering_signal = STEERING_KP * e_lat + STEERING_KD * e_lat_d;
