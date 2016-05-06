@@ -94,6 +94,8 @@ int servo_write = 0;
 void setup() {
   // begin serial
   Serial.begin(115200);
+  Serial.print("t,v,ESC,x,servo,lat_pos,lane_ref,ult_f,");
+  Serial.println("merge_st");
 
   // set pinmodes
   pinMode(ENCODER_FL, INPUT_PULLUP);
@@ -127,6 +129,7 @@ void setup() {
   ESC.write(90);
   delay(1000);
   
+
   // blink LED for indication
   digitalWrite(LED, HIGH);
   delay(500);
@@ -152,10 +155,29 @@ void loop() {
 //  read_serial_command();  
   
   // read ultrasonic sensors
-  read_ultrasonics();  
+  read_ultrasonics();
+//  Serial.print("ultrasonic: ");
+//  Serial.print(ultrasonic_dist[0]);
+//  Serial.print('\t');
+//  Serial.print(ultrasonic_dist[1]);
+//  Serial.print('\t');
+//  Serial.println(ultrasonic_dist[2]);
+  
   
   // high level steering strategy (lane selection and obstacle avoidance)
   path_control_by_ultrasonics();
+//  Serial.print("merge state: ");
+//  Serial.println(merge_state);
+
+
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(currVelocity);
+  Serial.print(",");
+  Serial.print(ESC_write);
+  Serial.print(",");
+  Serial.print(currPos);
+  Serial.print(",");
   
   // low level lane keeping PID
   float steering_percent = steering_PID();
@@ -163,17 +185,36 @@ void loop() {
   set_servo(servo_write);
 
   if (main_loop_count % MOTOR_LOOP_N == 0 ) {
-    // velocity control, compute and set throttle, every Nth loop
+//  if (true) {
+    // velocity control, compute and set throttle, every other loop
     currPos = (encoder_count1 + encoder_count2)*TICKTOMETERS/2;
+    
     currVelocity = (currPos-prevPos)/(LOOP_PERIOD*MOTOR_LOOP_N);
+//    Serial.println(currVelocity);
     prevPos = currPos;
     float motor_output = motor_PID(velocity_ref,currVelocity);
     motor_forward(motor_output);
   }
   main_loop_count++;
 
+
+//  Serial.print(servo_write);
+  Serial.print(",");
+  Serial.print(lat_pos);
+  Serial.print(",");
+  Serial.print(lane_ref);
+  Serial.print(",");
+  Serial.print(ultrasonic_dist[0]);
+  Serial.print(",");
+  Serial.println(merge_state);
+
+
+
   // wait for long enough to fulfill loop period
-  delay(LOOP_PERIOD_MS-(millis()-loop_start_time)); 
+//  Serial.print("Loop usage us: ");
+//  Serial.println(millis()-loop_start_time);
+  delay(LOOP_PERIOD_MS-(millis()-loop_start_time));
+  
 }
 
 
@@ -189,9 +230,9 @@ void loop() {
 int command = 77;
 void read_serial_command() {
   // read serial and update command char, if any
-  if (Serial.available() > 0) {
-    command = Serial.read();
-  }
+//  if (Serial.available() > 0) {
+//    command = Serial.read();
+//  }
   
   if (command == 76) { // 'L'
     merge_to_left();
@@ -251,8 +292,11 @@ double myMap(double x, double in_min, double in_max, double out_min, double out_
  */
 void motor_forward(float pwm) {
   int command = (int)myMap(pwm, 0.0, 1.0,90.0, 180.0 );
+  
   if (command < MIN_THROTTLE) command = MIN_THROTTLE;
   if (command > MAX_THROTTLE) command = MAX_THROTTLE;
+//  Serial.print("motor write: ");
+//  Serial.println(command);
   ESC_write = command;
   ESC.write(command);
 }
@@ -281,6 +325,8 @@ void encoderISR1() {
  */
 void encoderISR2() {
   encoder_count2++;
+//  currVelocity = 1000000.0*TICKTOMETERS/(micros()-velocity_timestamp);
+//  velocity_timestamp = micros();
 }
 
 
@@ -293,6 +339,10 @@ float motor_PID(float velocity_setpoint, float input) {
   /*Compute all the working error variables*/
   float error = velocity_setpoint - input;
   ITerm+= (VELOCITY_KI * error*(LOOP_PERIOD*MOTOR_LOOP_N));
+//  Serial.print("Iterm");
+//  Serial.println(ITerm);
+//  Serial.print("Error");
+//  Serial.println(error);
   if(ITerm > MOTORINTEGRALMAX) ITerm= MOTORINTEGRALMAX;
   else if(ITerm < MOTORINTEGRALMIN) ITerm= MOTORINTEGRALMIN;
   float dInput = (input - lastInput);
@@ -486,21 +536,28 @@ void read_ultrasonics() {
  * returns nothing.
  */
 
+
 float start_merge_pos = 0.0;
 
 void path_control_by_ultrasonics() {
   if (ultrasonic_dist[0] < FRONT_SPACE) { // if front is blocked
     if (ultrasonic_dist[1] > SIDE_SPACE) { // if left side is open
+//      Serial.println("gon merge left11111111111111111111111111");
       merge_to_left();
     } else if (ultrasonic_dist[2] > SIDE_SPACE) { // if right side is open
+//      Serial.println("gon merge right2222222222222222222222222");
       merge_to_right();
     } else { // all blocked, stop
+//      Serial.println("Emergency stop");
       motor_brake();
     }
     start_merge_pos = currPos;
   }
+//  Serial.print("currPos:");
+//  Serial.println(currPos);
   if (currPos - start_merge_pos > FRONT_SPACE) { // attempt merge back
     if ((merge_state == 1 && ultrasonic_dist[2] > SIDE_SPACE) || (merge_state == 2 && ultrasonic_dist[1] > SIDE_SPACE)){
+//      Serial.println("gon merge mid00000000000000000000000000000");
       merge_to_middle();
     }
   }  
@@ -519,10 +576,18 @@ float steering_PID() {
   } else if (number_of_lines == 1) {
     lat_pos = line_centers[0];
   }
+//  lane_ref = CENTER_LANE;
+//  lat_pos = line_centers[0];
   float e_lat = (lane_ref - lat_pos)/128.0;
   float e_lat_d = (e_lat - e_lat_prev) / LOOP_PERIOD;
   float steering_signal = STEERING_KP * e_lat + STEERING_KD * e_lat_d;
   e_lat_prev = e_lat;
   return steering_signal;
 }
+
+
+
+
+
+
 
