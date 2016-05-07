@@ -183,6 +183,7 @@ void loop() {
   float steering_percent = steering_PID();
   int servo_write = steering_to_servo(steering_percent);
   set_servo(servo_write);
+//  set_servo(90);
 
   if (main_loop_count % MOTOR_LOOP_N == 0 ) {
 //  if (true) {
