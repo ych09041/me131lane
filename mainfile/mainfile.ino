@@ -31,8 +31,8 @@
 // pinout definitions
 #define ESC_PIN       10
 #define SERVO_PIN     11
-#define ENCODER_FL    2
-#define ENCODER_FR    3
+#define ENCODER_1    2
+#define ENCODER_2    3
 #define ULTRASONIC_F  1  // A1
 #define ULTRASONIC_L  2  // A2
 #define ULTRASONIC_R  3  // A3
@@ -96,8 +96,8 @@ void setup() {
   Serial.begin(115200);
 
   // set pinmodes
-  pinMode(ENCODER_FL, INPUT_PULLUP);
-  pinMode(ENCODER_FR, INPUT_PULLUP);
+  pinMode(ENCODER_1, INPUT_PULLUP);
+  pinMode(ENCODER_2, INPUT_PULLUP);
   pinMode(ESC_PIN, OUTPUT);
   pinMode(SERVO_PIN, OUTPUT);
   pinMode(LED, OUTPUT);
