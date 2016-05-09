@@ -8,3 +8,5 @@ Tony Abdo, Hohyun Song, Cheng Hao Yuan
 The other files are test files used for submodule development.
 
 All files are developed for the Arduino Nano.
+
+Mechanical_CAD.zip contains SolidWorks file for all chassis extensions and super-structures.
